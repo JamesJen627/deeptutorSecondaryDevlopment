@@ -9,6 +9,7 @@ Custom fork for:
 
 ## Docs
 
+- [README（Fork 首页）](README.md)
 - [Phase 1 plan](docs/phase1-plan.md)
 - [Phase 2 plan](docs/phase2-plan.md)
 - [Upstream sync](UPSTREAM.md)
