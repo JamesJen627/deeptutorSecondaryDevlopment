@@ -12,6 +12,7 @@ Custom fork for:
 - [README（Fork 首页）](README.md)
 - [Phase 1 plan](docs/phase1-plan.md)
 - [Phase 2 plan](docs/phase2-plan.md)
+- [M7 — Windows 常驻运行与定时出题](docs/m7-windows-scheduled-quiz.md)
 - [Upstream sync](UPSTREAM.md)
 
 ## Paths (D 盘)

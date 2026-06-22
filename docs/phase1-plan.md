@@ -21,7 +21,7 @@
 | M4 | `load_kb_quiz_history(kb_name)` | Planner/Explore 注入 KB 全历史 |
 | M5 | Export API + 前端导出按钮 | 表头：题目/选项A-D/答案/解析 |
 | M6 | **定时出题 Scheduled Quiz** | 见下文 |
-| M7 | 文档 + Windows 常驻运行说明 | 用户可按文档配置夜间任务 |
+| M7 | 文档 + Windows 常驻运行说明 | [docs/m7-windows-scheduled-quiz.md](m7-windows-scheduled-quiz.md)（含备考两晚示例） |
 
 ## M6 — 定时自动出题（第一期方案）
 

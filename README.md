@@ -67,7 +67,7 @@ jobs:
     auto_export: true
 ```
 
-服务需保持运行；深度睡眠会暂停定时任务。Windows 常驻说明见 Phase 1 的 **M7**（待补文档）。
+服务需保持运行；深度睡眠会暂停定时任务。完整说明见 **[docs/m7-windows-scheduled-quiz.md](docs/m7-windows-scheduled-quiz.md)**（M7：Windows 常驻 + 开机自启 + 故障排查）。
 
 ---
 
@@ -78,6 +78,7 @@ jobs:
 | [SECONDARY_DEV.md](SECONDARY_DEV.md) | 开发路径、启动方式、分支策略 |
 | [UPSTREAM.md](UPSTREAM.md) | 如何同步官方新版本 |
 | [README_UPSTREAM.md](README_UPSTREAM.md) | 官方 DeepTutor 完整 README（镜像） |
+| [docs/m7-windows-scheduled-quiz.md](docs/m7-windows-scheduled-quiz.md) | **M7**：Windows 常驻、定时出题 YAML、开机自启 |
 | [AGENTS.md](AGENTS.md) | 架构与 Capability / Tool 说明 |
 
 ---
