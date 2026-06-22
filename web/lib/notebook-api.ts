@@ -138,6 +138,7 @@ export interface NotebookEntry {
   correct_answer: string;
   explanation: string;
   difficulty: string;
+  kb_name?: string;
   user_answer: string;
   user_answer_images?: NotebookAnswerImage[];
   is_correct: boolean;
@@ -171,11 +172,41 @@ async function expectJson<T>(response: Response): Promise<T> {
 
 // ── Entries ──────────────────────────────────────────────────────
 
+/** Sentinel value for the KB filter dropdown — entries with empty ``kb_name``. */
+export const QUESTION_BANK_UNTAGGED_KB = "__untagged__";
+
+export interface NotebookKbStats {
+  items: Array<{ kb_name: string; count: number }>;
+  untagged: number;
+  total: number;
+}
+
+export function notebookKbFilterParams(activeKbName: string | null): {
+  kb_name?: string;
+  kb_untagged?: boolean;
+} {
+  if (!activeKbName) return {};
+  if (activeKbName === QUESTION_BANK_UNTAGGED_KB) {
+    return { kb_untagged: true };
+  }
+  return { kb_name: activeKbName };
+}
+
+export async function listNotebookKbStats(): Promise<NotebookKbStats> {
+  const response = await apiFetch(
+    apiUrl("/api/v1/question-notebook/entries/kb-stats"),
+    { cache: "no-store" },
+  );
+  return expectJson<NotebookKbStats>(response);
+}
+
 export async function listNotebookEntries(
   filter: {
     category_id?: number;
     bookmarked?: boolean;
     is_correct?: boolean;
+    kb_name?: string;
+    kb_untagged?: boolean;
     limit?: number;
     offset?: number;
   } = {},
@@ -187,6 +218,8 @@ export async function listNotebookEntries(
     params.set("bookmarked", String(filter.bookmarked));
   if (filter.is_correct !== undefined)
     params.set("is_correct", String(filter.is_correct));
+  if (filter.kb_name) params.set("kb_name", filter.kb_name);
+  if (filter.kb_untagged) params.set("kb_untagged", "true");
   if (filter.limit !== undefined) params.set("limit", String(filter.limit));
   if (filter.offset !== undefined) params.set("offset", String(filter.offset));
   const query = params.toString();
@@ -195,6 +228,48 @@ export async function listNotebookEntries(
     { cache: "no-store" },
   );
   return expectJson<NotebookEntryListResponse>(response);
+}
+
+export interface NotebookExportFilter {
+  category_id?: number;
+  bookmarked?: boolean;
+  is_correct?: boolean;
+  kb_name?: string;
+  kb_untagged?: boolean;
+}
+
+export async function exportNotebookEntriesExcel(
+  filter: NotebookExportFilter = {},
+): Promise<void> {
+  const params = new URLSearchParams();
+  if (filter.category_id !== undefined)
+    params.set("category_id", String(filter.category_id));
+  if (filter.bookmarked !== undefined)
+    params.set("bookmarked", String(filter.bookmarked));
+  if (filter.is_correct !== undefined)
+    params.set("is_correct", String(filter.is_correct));
+  if (filter.kb_name) params.set("kb_name", filter.kb_name);
+  if (filter.kb_untagged) params.set("kb_untagged", "true");
+  const query = params.toString();
+  const response = await apiFetch(
+    apiUrl(
+      `/api/v1/question-notebook/entries/export${query ? `?${query}` : ""}`,
+    ),
+    { cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new Error(`Export failed: ${response.status}`);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  const filename = match?.[1] ?? "question-bank.xlsx";
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 export async function getNotebookEntry(
@@ -269,6 +344,7 @@ export async function upsertNotebookEntry(data: {
   correct_answer?: string;
   explanation?: string;
   difficulty?: string;
+  kb_name?: string;
   user_answer?: string;
   /**
    * Optional list of images attached to the learner's answer. Omit to

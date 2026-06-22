@@ -6,17 +6,54 @@ from __future__ import annotations
 
 import base64 as _b64
 import logging
+import time
 import uuid as _uuid
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
+from deeptutor.services.question_bank.export import entries_to_xlsx_bytes
+from deeptutor.services.question_bank.filters import filter_exportable_entries
 from deeptutor.services.session import get_sqlite_session_store
 from deeptutor.services.storage import get_attachment_store
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_EXPORT_BATCH_SIZE = 500
+
+
+async def _fetch_all_notebook_entries(
+    *,
+    category_id: int | None = None,
+    bookmarked: bool | None = None,
+    is_correct: bool | None = None,
+    kb_name: str | None = None,
+    kb_untagged: bool | None = None,
+) -> list[dict]:
+    store = get_sqlite_session_store()
+    resolved_kb = (kb_name or "").strip() or None
+    all_items: list[dict] = []
+    offset = 0
+    total = 0
+    while True:
+        result = await store.list_notebook_entries(
+            category_id=category_id,
+            bookmarked=bookmarked,
+            is_correct=is_correct,
+            kb_name=resolved_kb,
+            kb_untagged=kb_untagged,
+            limit=_EXPORT_BATCH_SIZE,
+            offset=offset,
+        )
+        items = list(result.get("items") or [])
+        total = int(result.get("total") or 0)
+        all_items.extend(items)
+        if len(all_items) >= total or not items:
+            break
+        offset += _EXPORT_BATCH_SIZE
+    return all_items
 
 
 # ── Models ────────────────────────────────────────────────────────
@@ -47,6 +84,7 @@ class NotebookEntryItem(BaseModel):
     correct_answer: str = ""
     explanation: str = ""
     difficulty: str = ""
+    kb_name: str = ""
     user_answer: str = ""
     user_answer_images: list[AnswerImageItem] = []
     is_correct: bool = False
@@ -60,6 +98,17 @@ class NotebookEntryItem(BaseModel):
 
 class NotebookEntryListResponse(BaseModel):
     items: list[NotebookEntryItem]
+    total: int
+
+
+class NotebookKbStatItem(BaseModel):
+    kb_name: str
+    count: int
+
+
+class NotebookKbStatsResponse(BaseModel):
+    items: list[NotebookKbStatItem]
+    untagged: int
     total: int
 
 
@@ -114,6 +163,7 @@ class UpsertEntryRequest(BaseModel):
     correct_answer: str = ""
     explanation: str = ""
     difficulty: str = ""
+    kb_name: str = ""
     user_answer: str = ""
     # Optional: list of images attached as part of the learner's answer.
     # ``None`` means "don't touch any previously-stored images on update";
@@ -202,25 +252,77 @@ async def upsert_single_entry(payload: UpsertEntryRequest):
     return entry
 
 
+@router.get("/entries/kb-stats", response_model=NotebookKbStatsResponse)
+async def notebook_kb_stats() -> NotebookKbStatsResponse:
+    store = get_sqlite_session_store()
+    stats = await store.notebook_kb_stats()
+    items = stats.get("items") or []
+    untagged = int(stats.get("untagged") or 0)
+    tagged_total = sum(int(item.get("count") or 0) for item in items)
+    return NotebookKbStatsResponse(
+        items=[NotebookKbStatItem(**item) for item in items],
+        untagged=untagged,
+        total=tagged_total + untagged,
+    )
+
+
 @router.get("/entries", response_model=NotebookEntryListResponse)
 async def list_entries(
     category_id: int | None = Query(default=None),
     bookmarked: bool | None = Query(default=None),
     is_correct: bool | None = Query(default=None),
+    kb_name: str | None = Query(default=None),
+    kb_untagged: bool | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> NotebookEntryListResponse:
     store = get_sqlite_session_store()
+    resolved_kb = (kb_name or "").strip() or None
     result = await store.list_notebook_entries(
         category_id=category_id,
         bookmarked=bookmarked,
         is_correct=is_correct,
+        kb_name=resolved_kb,
+        kb_untagged=kb_untagged,
         limit=limit,
         offset=offset,
     )
     return NotebookEntryListResponse(
         items=[NotebookEntryItem(**item) for item in result["items"]],
         total=result["total"],
+    )
+
+
+@router.get("/entries/export")
+async def export_entries(
+    category_id: int | None = Query(default=None),
+    bookmarked: bool | None = Query(default=None),
+    is_correct: bool | None = Query(default=None),
+    kb_name: str | None = Query(default=None),
+    kb_untagged: bool | None = Query(default=None),
+):
+    """Export filtered question-bank rows as ``.xlsx``.
+
+    Columns: 题目 / 选项A-D / 答案 / 解析.
+    """
+    items = await _fetch_all_notebook_entries(
+        category_id=category_id,
+        bookmarked=bookmarked,
+        is_correct=is_correct,
+        kb_name=kb_name,
+        kb_untagged=kb_untagged,
+    )
+    if not items:
+        raise HTTPException(status_code=404, detail="No entries to export")
+    exportable = filter_exportable_entries(items)
+    if not exportable:
+        raise HTTPException(status_code=404, detail="No entries to export")
+    payload = entries_to_xlsx_bytes(exportable)
+    filename = f"question-bank-{int(time.time())}.xlsx"
+    return Response(
+        content=payload,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

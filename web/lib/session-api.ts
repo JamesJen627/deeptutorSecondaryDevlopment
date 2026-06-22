@@ -113,6 +113,7 @@ export interface QuizResultItem {
   correct_answer: string;
   explanation?: string;
   difficulty?: string;
+  kb_name?: string;
   is_correct: boolean;
 }
 

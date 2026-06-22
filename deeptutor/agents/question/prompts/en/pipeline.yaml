@@ -114,7 +114,7 @@ explore:
     ## Conversation context
     {conversation_context}
 
-    ## Prior quiz history (only present if the learner already did quizzes earlier in this session)
+    ## Prior quiz history (same session or same knowledge base; empty when none)
     {quiz_history}
 
     Begin exploring.
@@ -180,6 +180,9 @@ plan:
 
     ## User request (original)
     {user_message}
+
+    ## Prior quiz history (avoid repeating topics; empty when none)
+    {quiz_history}
 
     ## Quiz parameters
     - Number of questions: {num_questions}
@@ -334,6 +337,7 @@ notices:
 
 empty:
   no_quiz_history: "(no prior quiz turns in this session)"
+  no_kb_quiz_history: "(no prior questions for this knowledge base)"
   no_attachments: "(no attachments)"
   no_conversation: "(no prior conversation)"
   no_kb: "(no knowledge base attached)"

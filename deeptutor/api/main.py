@@ -158,6 +158,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start cron service: {e}")
 
+    try:
+        from deeptutor.services.scheduled_quiz import get_scheduled_quiz_service
+
+        await get_scheduled_quiz_service().start()
+    except Exception as e:
+        logger.warning(f"Failed to start scheduled quiz service: {e}")
+
     # Ping PocketBase if configured — logs a warning (not an error) if unreachable
     try:
         from deeptutor.services.pocketbase_client import ping_pocketbase
@@ -195,6 +202,13 @@ async def lifespan(app: FastAPI):
         await get_cron_service().stop()
     except Exception as e:
         logger.warning(f"Failed to stop cron service: {e}")
+
+    try:
+        from deeptutor.services.scheduled_quiz import get_scheduled_quiz_service
+
+        await get_scheduled_quiz_service().stop()
+    except Exception as e:
+        logger.warning(f"Failed to stop scheduled quiz service: {e}")
 
     # Stop partners
     try:
@@ -325,6 +339,7 @@ from deeptutor.api.routers import (
     question,
     question_notebook,
     quiz_judge,
+    scheduled_quiz,
     sessions,
     settings,
     skills,
@@ -396,6 +411,12 @@ app.include_router(
     question_notebook.router,
     prefix="/api/v1/question-notebook",
     tags=["question-notebook"],
+    dependencies=_auth,
+)
+app.include_router(
+    scheduled_quiz.router,
+    prefix="/api/v1/scheduled-quiz",
+    tags=["scheduled-quiz"],
     dependencies=_auth,
 )
 app.include_router(

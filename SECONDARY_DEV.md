@@ -24,13 +24,47 @@ Custom fork for:
 
 ## Quick start (dev)
 
+> **Windows 说明**：本机 `pip` / `deeptutor` **不在 PATH**，请用下面带完整路径的命令，或运行 `scripts\` 下的脚本。
+>
+> **CMD 用户**：不要直接输入 `.\scripts\dev-start.ps1`（会用编辑器打开文件）。请用 **`scripts\dev-start.bat`**，或在 PowerShell 里运行 `.\scripts\dev-start.ps1`。
+
+### 方式 A — 一键脚本（推荐）
+
+**PowerShell：**
+
 ```powershell
 cd D:\Dev\deeptutorSecondaryDevlopment
-pip install -e .
+.\scripts\dev-install.ps1   # 首次初始化
+.\scripts\dev-start.ps1       # 启动
+```
+
+**CMD（命令提示符）：**
+
+```cmd
+cd /d D:\Dev\deeptutorSecondaryDevlopment
+scripts\dev-install.bat
+scripts\dev-start.bat
+```
+
+### 方式 B — 手动命令
+
+```powershell
+# 1. 后端（editable 安装，只需一次）
+cd D:\Dev\deeptutorSecondaryDevlopment
+D:\python3.12\python.exe -m pip install -e .
+
+# 2. 前端依赖（源码模式必须，只需一次）
+cd D:\Dev\deeptutorSecondaryDevlopment\web
+npm install
+
+# 3. 启动（工作区在 D 盘）
 cd D:\Dev\DeepTutor
-D:\python3.12\Scripts\deeptutor.exe init    # 首次在新工作区
 D:\python3.12\Scripts\deeptutor.exe start
 ```
+
+### 可选：把 Python 加入 PATH
+
+将 `D:\python3.12` 和 `D:\python3.12\Scripts` 加入系统环境变量 PATH 后，可直接使用 `pip` 和 `deeptutor`。
 
 或指定工作区根目录：
 

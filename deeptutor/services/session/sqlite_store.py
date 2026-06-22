@@ -18,6 +18,7 @@ from typing import Any
 import uuid
 
 from deeptutor.services.path_service import get_path_service
+from deeptutor.services.question_bank.filters import FAILED_GENERATION_PREFIX
 
 
 def _json_dumps(value: Any) -> str:
@@ -46,6 +47,39 @@ def _json_loads(value: str | None, default: Any) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return default
+
+
+_NOTEBOOK_CONFLICT_UPDATE = """
+ON CONFLICT(session_id, turn_id, question_id) DO UPDATE SET
+    question = excluded.question,
+    question_type = excluded.question_type,
+    options_json = excluded.options_json,
+    correct_answer = excluded.correct_answer,
+    explanation = excluded.explanation,
+    difficulty = excluded.difficulty,
+    kb_name = CASE WHEN excluded.kb_name != '' THEN excluded.kb_name ELSE notebook_entries.kb_name END,
+    user_answer = CASE WHEN excluded.user_answer != '' THEN excluded.user_answer ELSE notebook_entries.user_answer END,
+    is_correct = CASE WHEN excluded.user_answer != '' THEN excluded.is_correct ELSE notebook_entries.is_correct END,
+    updated_at = excluded.updated_at
+"""
+
+_NOTEBOOK_CONFLICT_UPDATE_WITH_IMAGES = """
+ON CONFLICT(session_id, turn_id, question_id) DO UPDATE SET
+    question = excluded.question,
+    question_type = excluded.question_type,
+    options_json = excluded.options_json,
+    correct_answer = excluded.correct_answer,
+    explanation = excluded.explanation,
+    difficulty = excluded.difficulty,
+    kb_name = CASE WHEN excluded.kb_name != '' THEN excluded.kb_name ELSE notebook_entries.kb_name END,
+    user_answer = CASE WHEN excluded.user_answer != '' THEN excluded.user_answer ELSE notebook_entries.user_answer END,
+    user_answer_images_json = CASE
+        WHEN excluded.user_answer != '' THEN excluded.user_answer_images_json
+        ELSE notebook_entries.user_answer_images_json
+    END,
+    is_correct = CASE WHEN excluded.user_answer != '' THEN excluded.is_correct ELSE notebook_entries.is_correct END,
+    updated_at = excluded.updated_at
+"""
 
 
 # Imported conversations share the session tables with native chats but carry
@@ -202,6 +236,7 @@ class SQLiteSessionStore:
                     correct_answer TEXT DEFAULT '',
                     explanation TEXT DEFAULT '',
                     difficulty TEXT DEFAULT '',
+                    kb_name TEXT DEFAULT '',
                     user_answer TEXT DEFAULT '',
                     user_answer_images_json TEXT DEFAULT '[]',
                     is_correct INTEGER DEFAULT 0,
@@ -230,6 +265,26 @@ class SQLiteSessionStore:
                     category_id INTEGER NOT NULL REFERENCES notebook_categories(id) ON DELETE CASCADE,
                     PRIMARY KEY (entry_id, category_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS generated_questions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kb_name TEXT NOT NULL,
+                    session_id TEXT NOT NULL DEFAULT '',
+                    turn_id TEXT NOT NULL DEFAULT '',
+                    question_id TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    question_type TEXT DEFAULT '',
+                    options_json TEXT DEFAULT '{}',
+                    correct_answer TEXT DEFAULT '',
+                    explanation TEXT DEFAULT '',
+                    difficulty TEXT DEFAULT '',
+                    topic TEXT DEFAULT '',
+                    created_at REAL NOT NULL,
+                    UNIQUE(kb_name, session_id, turn_id, question_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_generated_questions_kb
+                    ON generated_questions(kb_name, created_at DESC);
                 """
             )
             columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
@@ -278,6 +333,9 @@ class SQLiteSessionStore:
             self._migrate_notebook_entries_add_turn_id(conn)
             self._migrate_notebook_entries_add_user_answer_images(conn)
             self._migrate_notebook_entries_add_ai_judgment(conn)
+            self._migrate_notebook_entries_add_kb_name(conn)
+            self._ensure_generated_questions_table(conn)
+            self._backfill_notebook_entries_kb_name(conn)
             conn.commit()
 
     @staticmethod
@@ -394,6 +452,95 @@ class SQLiteSessionStore:
             return
         if "ai_judgment" not in cols:
             conn.execute("ALTER TABLE notebook_entries ADD COLUMN ai_judgment TEXT DEFAULT ''")
+
+    @staticmethod
+    def _migrate_notebook_entries_add_kb_name(conn: sqlite3.Connection) -> None:
+        """Back-fill ``kb_name`` on legacy DBs for KB-scoped quiz dedup."""
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(notebook_entries)").fetchall()}
+        if not cols:
+            return
+        if "kb_name" not in cols:
+            conn.execute("ALTER TABLE notebook_entries ADD COLUMN kb_name TEXT DEFAULT ''")
+
+    @staticmethod
+    def _backfill_notebook_entries_kb_name(conn: sqlite3.Connection) -> None:
+        """Fill empty ``notebook_entries.kb_name`` from history tables.
+
+        Most legacy rows were saved before ``kb_name`` was recorded on
+        generation/answer upserts. Prefer ``generated_questions`` (exact
+        per-question match), then fall back to the session's first attached KB.
+        """
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(notebook_entries)").fetchall()}
+        if not cols or "kb_name" not in cols:
+            return
+        conn.execute(
+            """
+            UPDATE notebook_entries
+            SET kb_name = (
+                SELECT g.kb_name
+                FROM generated_questions g
+                WHERE g.session_id = notebook_entries.session_id
+                  AND g.turn_id = notebook_entries.turn_id
+                  AND g.question_id = notebook_entries.question_id
+                LIMIT 1
+            )
+            WHERE TRIM(COALESCE(kb_name, '')) = ''
+              AND EXISTS (
+                SELECT 1
+                FROM generated_questions g
+                WHERE g.session_id = notebook_entries.session_id
+                  AND g.turn_id = notebook_entries.turn_id
+                  AND g.question_id = notebook_entries.question_id
+              )
+            """
+        )
+        rows = conn.execute(
+            """
+            SELECT n.rowid, s.preferences_json
+            FROM notebook_entries n
+            INNER JOIN sessions s ON s.id = n.session_id
+            WHERE TRIM(COALESCE(n.kb_name, '')) = ''
+            """
+        ).fetchall()
+        for row in rows:
+            prefs = _json_loads(row[1], {})
+            kbs = prefs.get("knowledge_bases") if isinstance(prefs, dict) else None
+            if not isinstance(kbs, list) or not kbs:
+                continue
+            kb = str(kbs[0]).strip()
+            if not kb:
+                continue
+            conn.execute(
+                "UPDATE notebook_entries SET kb_name = ? WHERE rowid = ?",
+                (kb, row[0]),
+            )
+
+    @staticmethod
+    def _ensure_generated_questions_table(conn: sqlite3.Connection) -> None:
+        """Create ``generated_questions`` on legacy DBs that predate the table."""
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS generated_questions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kb_name TEXT NOT NULL,
+                session_id TEXT NOT NULL DEFAULT '',
+                turn_id TEXT NOT NULL DEFAULT '',
+                question_id TEXT NOT NULL,
+                question TEXT NOT NULL,
+                question_type TEXT DEFAULT '',
+                options_json TEXT DEFAULT '{}',
+                correct_answer TEXT DEFAULT '',
+                explanation TEXT DEFAULT '',
+                difficulty TEXT DEFAULT '',
+                topic TEXT DEFAULT '',
+                created_at REAL NOT NULL,
+                UNIQUE(kb_name, session_id, turn_id, question_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_generated_questions_kb
+                ON generated_questions(kb_name, created_at DESC);
+            """
+        )
 
     async def _run(self, fn, *args):
         async with self._lock:
@@ -1433,6 +1580,7 @@ class SQLiteSessionStore:
                 if not question or not question_id:
                     continue
                 turn_id = (item.get("turn_id") or "").strip()
+                kb_name = (item.get("kb_name") or "").strip()
                 # ``user_answer_images`` is an optional list of records
                 # ``[{id, url, filename, mime_type}, …]``. We serialise it
                 # here so callers that only know about text don't need to
@@ -1443,17 +1591,14 @@ class SQLiteSessionStore:
                 images_json = _json_dumps(images_value) if isinstance(images_value, list) else None
                 if images_json is None:
                     conn.execute(
-                        """
+                        f"""
                         INSERT INTO notebook_entries (
                             session_id, turn_id, question_id, question, question_type,
                             options_json, correct_answer, explanation, difficulty,
-                            user_answer, user_answer_images_json, is_correct,
+                            kb_name, user_answer, user_answer_images_json, is_correct,
                             bookmarked, followup_session_id, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, 0, '', ?, ?)
-                        ON CONFLICT(session_id, turn_id, question_id) DO UPDATE SET
-                            user_answer = excluded.user_answer,
-                            is_correct = excluded.is_correct,
-                            updated_at = excluded.updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, 0, '', ?, ?)
+                        {_NOTEBOOK_CONFLICT_UPDATE}
                         """,
                         (
                             session_id,
@@ -1465,6 +1610,7 @@ class SQLiteSessionStore:
                             item.get("correct_answer") or "",
                             item.get("explanation") or "",
                             item.get("difficulty") or "",
+                            kb_name,
                             item.get("user_answer") or "",
                             1 if item.get("is_correct") else 0,
                             now,
@@ -1473,18 +1619,14 @@ class SQLiteSessionStore:
                     )
                 else:
                     conn.execute(
-                        """
+                        f"""
                         INSERT INTO notebook_entries (
                             session_id, turn_id, question_id, question, question_type,
                             options_json, correct_answer, explanation, difficulty,
-                            user_answer, user_answer_images_json, is_correct,
+                            kb_name, user_answer, user_answer_images_json, is_correct,
                             bookmarked, followup_session_id, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?)
-                        ON CONFLICT(session_id, turn_id, question_id) DO UPDATE SET
-                            user_answer = excluded.user_answer,
-                            user_answer_images_json = excluded.user_answer_images_json,
-                            is_correct = excluded.is_correct,
-                            updated_at = excluded.updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?)
+                        {_NOTEBOOK_CONFLICT_UPDATE_WITH_IMAGES}
                         """,
                         (
                             session_id,
@@ -1496,6 +1638,7 @@ class SQLiteSessionStore:
                             item.get("correct_answer") or "",
                             item.get("explanation") or "",
                             item.get("difficulty") or "",
+                            kb_name,
                             item.get("user_answer") or "",
                             images_json,
                             1 if item.get("is_correct") else 0,
@@ -1509,6 +1652,125 @@ class SQLiteSessionStore:
 
     async def upsert_notebook_entries(self, session_id: str, items: list[dict[str, Any]]) -> int:
         return await self._run(self._upsert_notebook_entries_sync, session_id, items)
+
+    def _upsert_generated_questions_sync(self, items: list[dict[str, Any]]) -> int:
+        if not items:
+            return 0
+        now = time.time()
+        upserted = 0
+        with self._connect() as conn:
+            for item in items:
+                kb_name = (item.get("kb_name") or "").strip()
+                question = (item.get("question") or "").strip()
+                question_id = (item.get("question_id") or "").strip()
+                if not kb_name or not question or not question_id:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO generated_questions (
+                        kb_name, session_id, turn_id, question_id, question,
+                        question_type, options_json, correct_answer, explanation,
+                        difficulty, topic, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(kb_name, session_id, turn_id, question_id) DO UPDATE SET
+                        question = excluded.question,
+                        question_type = excluded.question_type,
+                        options_json = excluded.options_json,
+                        correct_answer = excluded.correct_answer,
+                        explanation = excluded.explanation,
+                        difficulty = excluded.difficulty,
+                        topic = excluded.topic
+                    """,
+                    (
+                        kb_name,
+                        (item.get("session_id") or "").strip(),
+                        (item.get("turn_id") or "").strip(),
+                        question_id,
+                        question,
+                        item.get("question_type") or "",
+                        _json_dumps(item.get("options") or {}),
+                        item.get("correct_answer") or "",
+                        item.get("explanation") or "",
+                        item.get("difficulty") or "",
+                        item.get("topic") or "",
+                        now,
+                    ),
+                )
+                upserted += 1
+        return upserted
+
+    async def upsert_generated_questions(self, items: list[dict[str, Any]]) -> int:
+        return await self._run(self._upsert_generated_questions_sync, items)
+
+    def _list_generated_questions_by_kb_sync(
+        self,
+        kb_name: str,
+        limit: int,
+        offset: int,
+        exclude_failed_generations: bool = True,
+    ) -> dict[str, Any]:
+        resolved = (kb_name or "").strip()
+        if not resolved:
+            return {"items": [], "total": 0}
+        failed_clause = ""
+        params: list[Any] = [resolved]
+        if exclude_failed_generations:
+            failed_clause = " AND (question IS NULL OR substr(question, 1, ?) != ?)"
+            params.extend([len(FAILED_GENERATION_PREFIX), FAILED_GENERATION_PREFIX])
+        with self._connect() as conn:
+            total_row = conn.execute(
+                f"SELECT COUNT(*) AS cnt FROM generated_questions WHERE kb_name = ?{failed_clause}",
+                tuple(params),
+            ).fetchone()
+            total = int(total_row["cnt"]) if total_row else 0
+            rows = conn.execute(
+                f"""
+                SELECT
+                    id, kb_name, session_id, turn_id, question_id, question,
+                    question_type, options_json, correct_answer, explanation,
+                    difficulty, topic, created_at
+                FROM generated_questions
+                WHERE kb_name = ?{failed_clause}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params) + (limit, offset),
+            ).fetchall()
+        items = [
+            {
+                "id": int(row["id"]),
+                "kb_name": row["kb_name"] or "",
+                "session_id": row["session_id"] or "",
+                "turn_id": row["turn_id"] or "",
+                "question_id": row["question_id"] or "",
+                "question": row["question"],
+                "question_type": row["question_type"] or "",
+                "options": _json_loads(row["options_json"], {}),
+                "correct_answer": row["correct_answer"] or "",
+                "explanation": row["explanation"] or "",
+                "difficulty": row["difficulty"] or "",
+                "topic": row["topic"] or "",
+                "created_at": float(row["created_at"]),
+            }
+            for row in rows
+        ]
+        return {"items": items, "total": total}
+
+    async def list_generated_questions_by_kb(
+        self,
+        kb_name: str,
+        *,
+        limit: int = 500,
+        offset: int = 0,
+        exclude_failed_generations: bool = True,
+    ) -> dict[str, Any]:
+        return await self._run(
+            self._list_generated_questions_by_kb_sync,
+            kb_name,
+            max(1, int(limit)),
+            max(0, int(offset)),
+            exclude_failed_generations,
+        )
 
     @staticmethod
     def _serialize_notebook_entry(row: sqlite3.Row) -> dict[str, Any]:
@@ -1530,6 +1792,7 @@ class SQLiteSessionStore:
             "correct_answer": row["correct_answer"] or "",
             "explanation": row["explanation"] or "",
             "difficulty": row["difficulty"] or "",
+            "kb_name": (row["kb_name"] or "") if "kb_name" in keys else "",
             "user_answer": row["user_answer"] or "",
             "user_answer_images": images,
             "is_correct": bool(row["is_correct"]),
@@ -1548,12 +1811,15 @@ class SQLiteSessionStore:
         limit: int,
         offset: int,
         session_id: str | None = None,
+        kb_name: str | None = None,
+        kb_untagged: bool | None = None,
+        exclude_failed_generations: bool = True,
     ) -> dict[str, Any]:
         base = """
             SELECT
                 n.id, n.session_id, COALESCE(s.title, '') AS session_title,
                 n.turn_id, n.question_id, n.question, n.question_type, n.options_json,
-                n.correct_answer, n.explanation, n.difficulty,
+                n.correct_answer, n.explanation, n.difficulty, n.kb_name,
                 n.user_answer, n.user_answer_images_json, n.is_correct, n.bookmarked,
                 n.followup_session_id, n.ai_judgment, n.created_at, n.updated_at
             FROM notebook_entries n
@@ -1577,6 +1843,14 @@ class SQLiteSessionStore:
         if session_id is not None:
             conditions.append("n.session_id = ?")
             params.append(session_id)
+        if kb_untagged:
+            conditions.append("(n.kb_name IS NULL OR TRIM(n.kb_name) = '')")
+        elif kb_name is not None:
+            conditions.append("n.kb_name = ?")
+            params.append(kb_name.strip())
+        if exclude_failed_generations:
+            conditions.append("(n.question IS NULL OR substr(n.question, 1, ?) != ?)")
+            params.extend([len(FAILED_GENERATION_PREFIX), FAILED_GENERATION_PREFIX])
         where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
         with self._connect() as conn:
             total_row = conn.execute(count_base + where, tuple(params)).fetchone()
@@ -1597,6 +1871,9 @@ class SQLiteSessionStore:
         offset: int = 0,
         *,
         session_id: str | None = None,
+        kb_name: str | None = None,
+        kb_untagged: bool | None = None,
+        exclude_failed_generations: bool = True,
     ) -> dict[str, Any]:
         return await self._run(
             self._list_notebook_entries_sync,
@@ -1606,7 +1883,38 @@ class SQLiteSessionStore:
             limit,
             offset,
             session_id,
+            kb_name,
+            kb_untagged,
+            exclude_failed_generations,
         )
+
+    def _notebook_kb_stats_sync(self) -> dict[str, Any]:
+        failed_clause = " AND (n.question IS NULL OR substr(n.question, 1, ?) != ?)"
+        failed_params = [len(FAILED_GENERATION_PREFIX), FAILED_GENERATION_PREFIX]
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT COALESCE(TRIM(n.kb_name), '') AS kb, COUNT(*) AS cnt
+                FROM notebook_entries n
+                WHERE 1=1{failed_clause}
+                GROUP BY kb
+                ORDER BY kb
+                """,
+                tuple(failed_params),
+            ).fetchall()
+        items: list[dict[str, Any]] = []
+        untagged = 0
+        for row in rows:
+            kb = str(row["kb"] or "").strip()
+            count = int(row["cnt"] or 0)
+            if kb:
+                items.append({"kb_name": kb, "count": count})
+            else:
+                untagged = count
+        return {"items": items, "untagged": untagged}
+
+    async def notebook_kb_stats(self) -> dict[str, Any]:
+        return await self._run(self._notebook_kb_stats_sync)
 
     def _get_notebook_entry_sync(self, entry_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:

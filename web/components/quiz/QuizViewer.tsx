@@ -75,6 +75,8 @@ interface QuizViewerProps {
    */
   turnId?: string | null;
   language?: string;
+  /** Primary knowledge base attached when this quiz was generated. */
+  kbName?: string | null;
 }
 
 type AnswerImage = {
@@ -191,8 +193,10 @@ export default function QuizViewer({
   sessionId,
   turnId,
   language = "en",
+  kbName = null,
 }: QuizViewerProps) {
   const { t } = useTranslation();
+  const resolvedKbName = (kbName || "").trim();
   const followupController = useQuizFollowupController();
   // Read all follow-up threads so we can light up the "N messages" badge
   // and the per-chip dot indicator. Owned by QuizFollowupProvider so
@@ -430,11 +434,12 @@ export default function QuizViewer({
             correct_answer: question.correct_answer,
             explanation: question.explanation ?? "",
             difficulty: question.difficulty ?? "",
+            kb_name: resolvedKbName,
             is_correct: isAnswerCorrect(question, answer),
           },
         ];
       }),
-    [answers, questions],
+    [answers, questions, resolvedKbName],
   );
 
   useEffect(() => {
@@ -490,6 +495,7 @@ export default function QuizViewer({
           correct_answer: question.correct_answer,
           explanation: question.explanation ?? "",
           difficulty: question.difficulty ?? "",
+          kb_name: resolvedKbName || undefined,
           user_answer: getUserAnswer(question, answer),
           user_answer_images: imagePayload,
           is_correct: isAnswerCorrect(question, answer),
@@ -526,7 +532,7 @@ export default function QuizViewer({
         /* best-effort */
       }
     },
-    [sessionId, turnId],
+    [resolvedKbName, sessionId, turnId],
   );
 
   const handleSubmit = () => {

@@ -41,6 +41,7 @@ class QuizResultItem(BaseModel):
     correct_answer: str = ""
     explanation: str | None = ""
     difficulty: str | None = ""
+    kb_name: str = ""
     is_correct: bool
 
     @field_validator("options", mode="before")

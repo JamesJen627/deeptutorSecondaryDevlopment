@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   Bookmark,
   ChevronDown,
+  Download,
   ExternalLink,
   FolderOpen,
   Loader2,
@@ -18,17 +19,22 @@ import {
   X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import QuestionBankKbSelect from "@/components/notebook/QuestionBankKbSelect";
 import {
   createCategory,
   deleteCategory,
   deleteNotebookEntry,
+  exportNotebookEntriesExcel,
   listCategories,
   listNotebookEntries,
+  listNotebookKbStats,
+  notebookKbFilterParams,
   removeEntryFromCategory,
   renameCategory,
   updateNotebookEntry,
   type NotebookCategory,
   type NotebookEntry,
+  type NotebookKbStats,
 } from "@/lib/notebook-api";
 
 const MarkdownRenderer = dynamic(
@@ -47,8 +53,11 @@ export default function NotebookPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<FilterMode>("all");
   const [activeCategoryId, setActiveCategoryId] = useState<number | null>(null);
+  const [activeKbName, setActiveKbName] = useState<string | null>(null);
+  const [kbStats, setKbStats] = useState<NotebookKbStats | null>(null);
   const [categories, setCategories] = useState<NotebookCategory[]>([]);
   const [pendingId, setPendingId] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [newCatName, setNewCatName] = useState("");
@@ -66,7 +75,7 @@ export default function NotebookPage() {
   }, []);
 
   const loadItems = useCallback(
-    async (mode: FilterMode, catId: number | null) => {
+    async (mode: FilterMode, catId: number | null, kbName: string | null) => {
       setRefreshing(true);
       setError(null);
       try {
@@ -74,6 +83,7 @@ export default function NotebookPage() {
           bookmarked: mode === "bookmarked" ? true : undefined,
           is_correct: mode === "wrong" ? false : undefined,
           category_id: catId ?? undefined,
+          ...notebookKbFilterParams(kbName),
           limit: 200,
         });
         setItems(response.items);
@@ -89,9 +99,17 @@ export default function NotebookPage() {
   );
 
   useEffect(() => {
-    void loadItems(filter, activeCategoryId);
+    void loadItems(filter, activeCategoryId, activeKbName);
     void loadCategories();
-  }, [filter, activeCategoryId, loadItems, loadCategories]);
+  }, [filter, activeCategoryId, activeKbName, loadItems, loadCategories]);
+
+  useEffect(() => {
+    void listNotebookKbStats()
+      .then(setKbStats)
+      .catch(() => {
+        /* ignore */
+      });
+  }, [total]);
 
   const handleToggleBookmark = useCallback(
     async (item: NotebookEntry) => {
@@ -183,6 +201,23 @@ export default function NotebookPage() {
     },
     [activeCategoryId, loadCategories, t],
   );
+
+  const handleExportExcel = useCallback(async () => {
+    setExporting(true);
+    setError(null);
+    try {
+      await exportNotebookEntriesExcel({
+        category_id: activeCategoryId ?? undefined,
+        bookmarked: filter === "bookmarked" ? true : undefined,
+        is_correct: filter === "wrong" ? false : undefined,
+        ...notebookKbFilterParams(activeKbName),
+      });
+    } catch (err) {
+      setError(String(err instanceof Error ? err.message : err));
+    } finally {
+      setExporting(false);
+    }
+  }, [activeCategoryId, activeKbName, filter]);
 
   const FILTERS: { mode: FilterMode; label: string }[] = [
     { mode: "all", label: "All" },
@@ -351,9 +386,32 @@ export default function NotebookPage() {
               );
             })}
           </div>
-          <span className="shrink-0 text-[12px] text-[var(--muted-foreground)]">
-            {t("Total")}: {total}
-          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            <QuestionBankKbSelect
+              value={activeKbName}
+              onChange={setActiveKbName}
+              options={kbStats?.items ?? []}
+              untaggedCount={kbStats?.untagged ?? 0}
+              totalCount={kbStats?.total}
+              disabled={loading}
+            />
+            <button
+              type="button"
+              onClick={() => void handleExportExcel()}
+              disabled={exporting || total === 0}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-[12px] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {exporting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+              {t("Export Excel")}
+            </button>
+            <span className="text-[12px] text-[var(--muted-foreground)]">
+              {t("Total")}: {total}
+            </span>
+          </div>
         </div>
 
         {/* Content */}
@@ -373,7 +431,7 @@ export default function NotebookPage() {
               {error}
             </p>
             <button
-              onClick={() => void loadItems(filter, activeCategoryId)}
+              onClick={() => void loadItems(filter, activeCategoryId, activeKbName)}
               className="mt-3 rounded-lg bg-[var(--primary)] px-4 py-1.5 text-[12px] font-medium text-white"
             >
               {t("Retry")}

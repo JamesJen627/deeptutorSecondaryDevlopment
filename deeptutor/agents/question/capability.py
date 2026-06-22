@@ -100,7 +100,7 @@ class DeepQuestionCapability(BaseCapability):
             # New custom-mode pipeline: explore → plan → per-question quiz loop.
             # The pipeline owns its own stream.content / stream.result emission;
             # nothing here to render afterwards.
-            from deeptutor.agents.question.history import load_session_quiz_history
+            from deeptutor.agents.question.history import load_quiz_history
             from deeptutor.agents.question.pipeline import QuestionPipeline
             from deeptutor.agents.question.request_config import (
                 build_question_runtime_config,
@@ -117,7 +117,10 @@ class DeepQuestionCapability(BaseCapability):
                 )
                 return
 
-            quiz_history = await load_session_quiz_history(context.session_id or "")
+            quiz_history = await load_quiz_history(
+                session_id=context.session_id or "",
+                kb_name=kb_name,
+            )
             runtime_config = build_question_runtime_config(
                 base_config=load_config_with_main("main.yaml"),
             )
@@ -179,7 +182,7 @@ class DeepQuestionCapability(BaseCapability):
                                          "mimic the attached source" hint
                                          prefixed onto the user_message
         """
-        from deeptutor.agents.question.history import load_session_quiz_history
+        from deeptutor.agents.question.history import load_quiz_history
         from deeptutor.agents.question.mimic_source import (
             parse_exam_paper_to_templates,
         )
@@ -214,7 +217,10 @@ class DeepQuestionCapability(BaseCapability):
             enabled_tools=list(context.enabled_tools or []),
             runtime_config=runtime_config,
         )
-        quiz_history = await load_session_quiz_history(context.session_id or "")
+        quiz_history = await load_quiz_history(
+            session_id=context.session_id or "",
+            kb_name=kb_name,
+        )
 
         async def _emit_parse_notice(message: str) -> None:
             async with stream.stage("exploring", source=self.name):

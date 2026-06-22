@@ -465,6 +465,7 @@ const AssistantMessage = memo(function AssistantMessage({
             sessionId={sessionId}
             turnId={resultEvent?.turn_id ?? null}
             language={language}
+            kbName={researchRequestSnapshot?.knowledgeBases?.[0] ?? null}
           />
         </>
       ) : hasInlineAskUser ? (

@@ -557,6 +557,7 @@ class QuestionPipeline:
                     difficulty=difficulty,
                     allowed_types=allowed_types,
                     per_type_counts=per_type_counts,
+                    quiz_history=quiz_history,
                     stream=stream,
                     client=client,
                 )
@@ -591,6 +592,7 @@ class QuestionPipeline:
                     index=index,
                     total=len(plan.templates),
                 )
+                await self._persist_generated_question(context=context, qa_pair=qa_pair)
                 qa_pairs.append(qa_pair)
 
         # ----- Result envelope -----
@@ -696,6 +698,7 @@ class QuestionPipeline:
         difficulty: str,
         allowed_types: list[str],
         per_type_counts: dict[str, int],
+        quiz_history: list[QuizHistoryEntry],
         stream: StreamBus,
         client: Any,
     ) -> QuizPlan:
@@ -705,6 +708,7 @@ class QuestionPipeline:
             "plan.user_template",
             user_message=user_message,
             exploration_trace=exploration_trace or self._t("empty.no_exploration_trace"),
+            quiz_history=self._render_quiz_history(quiz_history),
             num_questions=num_questions,
             allowed_types=_format_allowed_types(allowed_types),
             per_type_counts=_format_per_type_counts(per_type_counts),
@@ -1226,6 +1230,23 @@ class QuestionPipeline:
             metadata=merge_trace_metadata(meta, {"trace_kind": "llm_output"}),
         )
 
+    async def _persist_generated_question(
+        self,
+        *,
+        context: UnifiedContext,
+        qa_pair: QuizPair,
+    ) -> None:
+        from deeptutor.agents.question.persistence import persist_generated_question
+
+        session_id = str(context.session_id or "").strip()
+        turn_id = str(context.metadata.get("turn_id", "") or "").strip()
+        await persist_generated_question(
+            session_id=session_id,
+            turn_id=turn_id,
+            kb_name=self.kb_name,
+            qa_pair=qa_pair,
+        )
+
     # ------------------------------------------------------------------
     # Final result envelope
     # ------------------------------------------------------------------
@@ -1721,6 +1742,8 @@ class QuestionPipeline:
 
     def _render_quiz_history(self, history: list[QuizHistoryEntry]) -> str:
         if not history:
+            if self.kb_name:
+                return self._t("empty.no_kb_quiz_history")
             return self._t("empty.no_quiz_history")
         lines = [
             (

@@ -360,3 +360,104 @@ def test_lookup_missing_entry_returns_204_when_missing_ok(store: SQLiteSessionSt
         )
         assert resp.status_code == 204
         assert resp.content == b""
+
+
+def test_export_entries_xlsx(store: SQLiteSessionStore) -> None:
+    from deeptutor.services.question_bank.export import EXPORT_HEADERS, parse_xlsx_rows
+
+    session = asyncio.run(store.create_session(title="Export Session"))
+    sid = session["id"]
+    asyncio.run(
+        store.upsert_notebook_entries(
+            sid,
+            [
+                {
+                    "turn_id": "t1",
+                    "question_id": "q1",
+                    "question": "Capital of France?",
+                    "question_type": "choice",
+                    "options": {"A": "Berlin", "B": "Paris", "C": "Rome", "D": "Madrid"},
+                    "correct_answer": "B",
+                    "explanation": "Paris is the capital.",
+                    "difficulty": "easy",
+                    "kb_name": "geo",
+                    "user_answer": "",
+                    "is_correct": False,
+                }
+            ],
+        )
+    )
+
+    with TestClient(_build_app(store)) as client:
+        empty = client.get("/api/v1/question-notebook/entries/export", params={"kb_name": "missing"})
+        assert empty.status_code == 404
+
+        resp = client.get("/api/v1/question-notebook/entries/export")
+        assert resp.status_code == 200
+        assert (
+            resp.headers["content-type"]
+            == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        rows = parse_xlsx_rows(resp.content)
+        assert rows[0] == EXPORT_HEADERS
+        assert rows[1][0] == "Capital of France?"
+        assert rows[1][2] == "Paris"
+        assert rows[1][5] == "B"
+        assert rows[1][6] == "Paris is the capital."
+
+        filtered = client.get(
+            "/api/v1/question-notebook/entries/export",
+            params={"kb_name": "geo"},
+        )
+        assert filtered.status_code == 200
+        assert len(parse_xlsx_rows(filtered.content)) == 2
+
+
+def test_export_skips_failed_generation_entries(store: SQLiteSessionStore) -> None:
+    from deeptutor.services.question_bank.export import parse_xlsx_rows
+
+    session = asyncio.run(store.create_session(title="Export Session"))
+    sid = session["id"]
+    asyncio.run(
+        store.upsert_notebook_entries(
+            sid,
+            [
+                {
+                    "turn_id": "t1",
+                    "question_id": "q_bad",
+                    "question": "[Generation failed] topic",
+                    "question_type": "written",
+                    "options": {},
+                    "correct_answer": "N/A",
+                    "explanation": "N/A",
+                    "user_answer": "",
+                    "is_correct": False,
+                },
+                {
+                    "turn_id": "t1",
+                    "question_id": "q_good",
+                    "question": "Good question?",
+                    "question_type": "written",
+                    "options": {},
+                    "correct_answer": "yes",
+                    "explanation": "ok",
+                    "user_answer": "",
+                    "is_correct": False,
+                },
+            ],
+        )
+    )
+
+    with TestClient(_build_app(store)) as client:
+        resp = client.get("/api/v1/question-notebook/entries/export")
+        assert resp.status_code == 200
+        rows = parse_xlsx_rows(resp.content)
+        assert len(rows) == 2
+        assert rows[1][0] == "Good question?"
+
+        listed = client.get("/api/v1/question-notebook/entries")
+        assert listed.status_code == 200
+        body = listed.json()
+        assert body["total"] == 1
+        assert body["items"][0]["question"] == "Good question?"
+

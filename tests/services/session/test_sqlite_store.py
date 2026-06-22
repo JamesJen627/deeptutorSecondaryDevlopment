@@ -265,3 +265,217 @@ def test_category_cascade_on_entry_delete(store: SQLiteSessionStore) -> None:
     asyncio.run(store.delete_notebook_entry(eid))
     cats = asyncio.run(store.list_categories())
     assert cats[0]["entry_count"] == 0
+
+
+def test_upsert_notebook_entries_persists_kb_name(store: SQLiteSessionStore) -> None:
+    session = asyncio.run(store.create_session())
+    asyncio.run(
+        store.upsert_notebook_entries(
+            session["id"],
+            [
+                {
+                    "turn_id": "t1",
+                    "question_id": "q_1",
+                    "question": "What is 2+2?",
+                    "question_type": "written",
+                    "options": {},
+                    "correct_answer": "4",
+                    "explanation": "addition",
+                    "difficulty": "easy",
+                    "kb_name": "毛概",
+                    "user_answer": "",
+                    "is_correct": False,
+                }
+            ],
+        )
+    )
+    entry = asyncio.run(store.list_notebook_entries())["items"][0]
+    assert entry["kb_name"] == "毛概"
+
+
+def test_generation_upsert_does_not_clobber_user_answer(store: SQLiteSessionStore) -> None:
+    session = asyncio.run(store.create_session())
+    sid = session["id"]
+    asyncio.run(
+        store.upsert_notebook_entries(
+            sid,
+            [
+                {
+                    "turn_id": "t1",
+                    "question_id": "q_1",
+                    "question": "What is 2+2?",
+                    "question_type": "written",
+                    "options": {},
+                    "correct_answer": "4",
+                    "explanation": "addition",
+                    "difficulty": "easy",
+                    "kb_name": "毛概",
+                    "user_answer": "4",
+                    "is_correct": True,
+                }
+            ],
+        )
+    )
+    asyncio.run(
+        store.upsert_notebook_entries(
+            sid,
+            [
+                {
+                    "turn_id": "t1",
+                    "question_id": "q_1",
+                    "question": "What is 2+2?",
+                    "question_type": "written",
+                    "options": {},
+                    "correct_answer": "4",
+                    "explanation": "addition",
+                    "difficulty": "easy",
+                    "kb_name": "毛概",
+                    "user_answer": "",
+                    "is_correct": False,
+                }
+            ],
+        )
+    )
+    entry = asyncio.run(store.list_notebook_entries())["items"][0]
+    assert entry["user_answer"] == "4"
+    assert entry["is_correct"] is True
+    assert entry["kb_name"] == "毛概"
+
+
+def test_generated_questions_kb_scoped_history(store: SQLiteSessionStore) -> None:
+    asyncio.run(
+        store.upsert_generated_questions(
+            [
+                {
+                    "kb_name": "毛概",
+                    "session_id": "s1",
+                    "turn_id": "t1",
+                    "question_id": "q_1",
+                    "question": "Q1",
+                    "question_type": "choice",
+                    "options": {"A": "a"},
+                    "correct_answer": "A",
+                    "explanation": "e1",
+                    "difficulty": "easy",
+                    "topic": "topic1",
+                },
+                {
+                    "kb_name": "毛概",
+                    "session_id": "s2",
+                    "turn_id": "t2",
+                    "question_id": "q_2",
+                    "question": "Q2",
+                    "question_type": "choice",
+                    "options": {"A": "a"},
+                    "correct_answer": "A",
+                    "explanation": "e2",
+                    "difficulty": "easy",
+                    "topic": "topic2",
+                },
+                {
+                    "kb_name": "other",
+                    "session_id": "s3",
+                    "turn_id": "t3",
+                    "question_id": "q_3",
+                    "question": "Q3",
+                    "question_type": "choice",
+                    "options": {"A": "a"},
+                    "correct_answer": "A",
+                    "explanation": "e3",
+                    "difficulty": "easy",
+                    "topic": "topic3",
+                },
+            ]
+        )
+    )
+    result = asyncio.run(store.list_generated_questions_by_kb("毛概"))
+    assert result["total"] == 2
+    assert {item["question_id"] for item in result["items"]} == {"q_1", "q_2"}
+
+
+def test_backfill_notebook_entries_kb_name_from_session_preferences(
+    store: SQLiteSessionStore,
+) -> None:
+    session = asyncio.run(store.create_session())
+    asyncio.run(
+        store.update_session_preferences(
+            session["id"],
+            {"knowledge_bases": ["习近平新时代中国特色社会主义思想概论"]},
+        )
+    )
+    asyncio.run(
+        store.upsert_notebook_entries(
+            session["id"],
+            [
+                {
+                    "turn_id": "t1",
+                    "question_id": "q_1",
+                    "question": "Untagged legacy question?",
+                    "question_type": "written",
+                    "options": {},
+                    "correct_answer": "yes",
+                    "explanation": "",
+                    "difficulty": "easy",
+                    "kb_name": "",
+                    "user_answer": "",
+                    "is_correct": False,
+                }
+            ],
+        )
+    )
+    with store._connect() as conn:
+        SQLiteSessionStore._backfill_notebook_entries_kb_name(conn)
+        conn.commit()
+    entry = asyncio.run(store.list_notebook_entries())["items"][0]
+    assert entry["kb_name"] == "习近平新时代中国特色社会主义思想概论"
+
+
+def test_backfill_notebook_entries_kb_name_from_generated_questions(
+    store: SQLiteSessionStore,
+) -> None:
+    session = asyncio.run(store.create_session())
+    asyncio.run(
+        store.upsert_notebook_entries(
+            session["id"],
+            [
+                {
+                    "turn_id": "t1",
+                    "question_id": "q_1",
+                    "question": "Another legacy question?",
+                    "question_type": "written",
+                    "options": {},
+                    "correct_answer": "yes",
+                    "explanation": "",
+                    "difficulty": "easy",
+                    "kb_name": "",
+                    "user_answer": "",
+                    "is_correct": False,
+                }
+            ],
+        )
+    )
+    asyncio.run(
+        store.upsert_generated_questions(
+            [
+                {
+                    "kb_name": "毛概",
+                    "session_id": session["id"],
+                    "turn_id": "t1",
+                    "question_id": "q_1",
+                    "question": "Another legacy question?",
+                    "question_type": "written",
+                    "options": {},
+                    "correct_answer": "yes",
+                    "explanation": "",
+                    "difficulty": "easy",
+                    "topic": "",
+                }
+            ]
+        )
+    )
+    with store._connect() as conn:
+        SQLiteSessionStore._backfill_notebook_entries_kb_name(conn)
+        conn.commit()
+    entry = asyncio.run(store.list_notebook_entries())["items"][0]
+    assert entry["kb_name"] == "毛概"
+

@@ -97,7 +97,7 @@ explore:
     ## 对话上下文
     {conversation_context}
 
-    ## 历史出题记录（仅当本 session 之前出过题时存在）
+    ## 历史出题记录（同 session 或同知识库下此前已生成的题目；无则为空）
     {quiz_history}
 
     开始探索。
@@ -161,6 +161,9 @@ plan:
 
     ## 用户原请求
     {user_message}
+
+    ## 历史出题记录（避免重复考点；无则为空）
+    {quiz_history}
 
     ## 出题参数
     - 题目数量：{num_questions}
@@ -315,6 +318,7 @@ notices:
 
 empty:
   no_quiz_history: "（本 session 之前没有出过题）"
+  no_kb_quiz_history: "（该知识库尚无历史题目）"
   no_attachments: "（无附件）"
   no_conversation: "（无对话上下文）"
   no_kb: "（未挂载知识库）"
