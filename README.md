@@ -1,5 +1,9 @@
 <div align="center">
 
+> **Secondary development fork** — See [SECONDARY_DEV.md](SECONDARY_DEV.md), [docs/phase1-plan.md](docs/phase1-plan.md), [docs/phase2-plan.md](docs/phase2-plan.md). Upstream: [HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor).
+
+<div align="center">
+
 <p align="center"><img src="assets/figs/logo/logo.png" alt="DeepTutor logo" height="56" style="vertical-align: middle;">&nbsp;<img src="assets/figs/logo/banner.png" alt="DeepTutor" height="48" style="vertical-align: middle;"></p>
 
 # DeepTutor: Agent-Native Personalized Tutoring
