@@ -20,9 +20,10 @@ pip install -e .
 
 ## Local development
 
-```bash
-cd C:\Users\36739\deeptutorSecondaryDevlopment
+```powershell
+cd D:\Dev\deeptutorSecondaryDevlopment
 pip install -e ".[dev]"   # or per pyproject instructions
+cd D:\Dev\DeepTutor
 deeptutor init
 deeptutor start
 ```

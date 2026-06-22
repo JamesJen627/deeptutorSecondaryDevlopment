@@ -13,17 +13,30 @@ Custom fork for:
 - [Phase 2 plan](docs/phase2-plan.md)
 - [Upstream sync](UPSTREAM.md)
 
+## Paths (D 盘)
+
+| 用途 | 路径 |
+|------|------|
+| 源码 / Fork 仓库 | `D:\Dev\deeptutorSecondaryDevlopment` |
+| 运行工作区（数据、题库、KB） | `D:\Dev\DeepTutor` |
+
+> 2026-06-22 起项目已从 C 盘迁至 D 盘，避免系统盘占满。旧路径 `C:\Users\36739\...` 可在关闭 Cursor 后手动删除。
+
 ## Quick start (dev)
 
 ```powershell
-cd C:\Users\36739\deeptutorSecondaryDevlopment
+cd D:\Dev\deeptutorSecondaryDevlopment
 pip install -e .
-cd C:\Users\36739\deeptutorSecondaryDevlopment   # workspace for data/
-deeptutor init
-deeptutor start
+cd D:\Dev\DeepTutor
+D:\python3.12\Scripts\deeptutor.exe init    # 首次在新工作区
+D:\python3.12\Scripts\deeptutor.exe start
 ```
 
-Use `C:\Users\36739\DeepTutor` as runtime workspace if you want to keep existing KB data, or copy `data/user` from the old install.
+或指定工作区根目录：
+
+```powershell
+D:\python3.12\Scripts\deeptutor.exe start --home D:\Dev\DeepTutor
+```
 
 ## Branch strategy
 
